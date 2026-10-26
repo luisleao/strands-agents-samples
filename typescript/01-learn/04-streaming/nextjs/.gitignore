@@ -1,0 +1,21 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# Next.js
+.next/
+next-env.d.ts
+
+# Environment variables
+.env
+.env.local
+
+# OS
+.DS_Store
+
+# Logs
+*.log
+npm-debug.log*
+
+# TypeScript
+*.tsbuildinfo

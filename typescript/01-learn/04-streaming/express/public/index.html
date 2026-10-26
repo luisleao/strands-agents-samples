@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Strands SSE example</title>
+    <style>
+      body {
+        font: 16px/1.5 system-ui, sans-serif;
+        max-width: 48rem;
+        margin: 2rem auto;
+        padding: 0 1rem;
+      }
+      #answer {
+        min-height: 4rem;
+        padding: 0.75rem;
+        border: 1px solid #767676;
+        border-radius: 4px;
+        white-space: pre-wrap;
+      }
+      #log {
+        max-height: 16rem;
+        overflow: auto;
+        padding: 0.75rem;
+        background: #f3f3f3;
+        font-size: 0.8rem;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Stream a Strands agent to the browser</h1>
+      <form id="ask">
+        <label for="prompt">Ask the agent</label>
+        <input id="prompt" value="What is the weather in Lisbon?" size="40" required />
+        <button>Send</button>
+      </form>
+      <p>
+        <button type="button" id="stop" disabled>Stop the run</button>
+        <button type="button" id="drop" disabled>Drop the connection</button>
+        <label><input type="checkbox" id="long-polling" /> Use long polling</label>
+      </p>
+      <p id="status" aria-live="polite"></p>
+      <div id="answer"></div>
+      <h2 id="log-heading">Events on the wire</h2>
+      <pre id="log" tabindex="0" aria-labelledby="log-heading"></pre>
+    </main>
+    <script type="module">
+      const answer = document.querySelector('#answer')
+      const status = document.querySelector('#status')
+      const log = document.querySelector('#log')
+      const stopButton = document.querySelector('#stop')
+      const dropButton = document.querySelector('#drop')
+      const longPolling = document.querySelector('#long-polling')
+
+      // The run on screen: its ID, the last event ID received, the streamed text, and a
+      // function that closes its current connection.
+      let run
+
+      document.querySelector('#ask').addEventListener('submit', async (submit) => {
+        submit.preventDefault()
+        const prompt = document.querySelector('#prompt').value
+        const response = await fetch('/runs', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompt }),
+        })
+        if (!response.ok) {
+          status.textContent = `The run did not start: HTTP ${response.status}.`
+          return
+        }
+        const { id } = await response.json()
+        // Leave the previous run. With no listener, it cancels itself after 30 seconds.
+        run?.disconnect()
+        run = { id, lastId: 0, text: '', done: false, disconnect: () => {} }
+        answer.textContent = ''
+        log.textContent = ''
+        status.textContent = 'Waiting for the agent'
+        setRunning(true)
+        connect(run)
+      })
+
+      // Both transports deliver the same events to the same handler.
+      function connect(current) {
+        if (longPolling.checked) poll(current)
+        else stream(current)
+      }
+
+      // Server-sent events. EventSource reconnects on its own and sends Last-Event-ID.
+      function stream(current) {
+        const source = new EventSource(`/runs/${current.id}/events?after=${current.lastId}`)
+        source.onmessage = (message) => handle(current, JSON.parse(message.data))
+        source.onerror = () => {
+          // CLOSED means EventSource gave up, for example after a 404 for an expired run.
+          if (source.readyState === EventSource.CLOSED && !current.done) {
+            status.textContent = 'The stream closed before the run ended.'
+            setRunning(false)
+          }
+        }
+        current.disconnect = () => source.close()
+      }
+
+      // Long polling. Each request returns the events after the last ID received.
+      async function poll(current) {
+        let connected = true
+        current.disconnect = () => {
+          connected = false
+        }
+        while (connected && !current.done) {
+          try {
+            const response = await fetch(`/runs/${current.id}/poll?after=${current.lastId}`)
+            if (response.status === 404) {
+              status.textContent = 'The server no longer has this run.'
+              setRunning(false)
+              return
+            }
+            const { events } = await response.json()
+            for (const event of events) {
+              if (connected) handle(current, event)
+            }
+          } catch {
+            // Wait before the next request, like EventSource does after an error.
+            await new Promise((resolve) => setTimeout(resolve, 3000))
+          }
+        }
+      }
+
+      function handle(current, event) {
+        log.textContent += `${JSON.stringify(event)}\n`
+        // Skip schema versions and event types this client does not know.
+        if (event.v !== 1) return
+        // The first event replaces the waiting message.
+        if (current.lastId === 0) status.textContent = ''
+        current.lastId = event.id
+        if (event.type === 'text') {
+          current.text += event.text
+          answer.textContent = current.text
+        } else if (event.type === 'tool') {
+          status.textContent = event.status === 'started' ? `Running ${event.name}` : ''
+        } else if (event.type === 'final') {
+          current.done = true
+          current.disconnect()
+          // The final event is authoritative: it replaces the streamed text.
+          answer.textContent = event.text || `The run ended: ${event.status}.`
+          status.textContent = ''
+          setRunning(false)
+        }
+      }
+
+      function setRunning(running) {
+        stopButton.disabled = !running
+        dropButton.disabled = !running
+        answer.setAttribute('aria-busy', String(running))
+      }
+
+      // The final event of a cancelled run arrives on the open connection.
+      stopButton.addEventListener('click', async () => {
+        status.textContent = 'Stopping the run'
+        await fetch(`/runs/${run.id}/cancel`, { method: 'POST' })
+      })
+
+      // Simulates a network drop, then resumes after the last event received.
+      dropButton.addEventListener('click', () => {
+        const current = run
+        current.disconnect()
+        log.textContent += `-- connection dropped after event ${current.lastId} --\n`
+        status.textContent = 'Connection dropped. Reconnecting in 2 seconds'
+        setTimeout(() => {
+          if (current !== run || current.done) return
+          status.textContent = ''
+          connect(current)
+        }, 2000)
+      })
+    </script>
+  </body>
+</html>

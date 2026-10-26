@@ -1066,7 +1066,7 @@
       "category": "learn",
       "categoryLabel": "Learn",
       "title": "Streaming",
-      "description": "Stream responses (Coming Soon)",
+      "description": "Stream responses to the browser with SSE, from Express or Next.js",
       "tags": [],
       "path": "typescript/01-learn/04-streaming",
       "url": "https://github.com/strands-agents/samples/tree/main/typescript/01-learn/04-streaming"

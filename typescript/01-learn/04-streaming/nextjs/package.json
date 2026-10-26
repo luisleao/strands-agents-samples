@@ -1,0 +1,28 @@
+{
+  "name": "04-streaming-nextjs",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Stream a Strands agent to the browser from Next.js route handlers with server-sent events, a versioned event schema, and resumable event IDs",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@strands-agents/sdk": "1.22.0",
+    "next": "16.4.3",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "typescript": "5.9.3"
+  }
+}

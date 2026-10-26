@@ -1,0 +1,22 @@
+body {
+  font: 16px/1.5 system-ui, sans-serif;
+  max-width: 48rem;
+  margin: 2rem auto;
+  padding: 0 1rem;
+}
+
+#answer {
+  min-height: 4rem;
+  padding: 0.75rem;
+  border: 1px solid #767676;
+  border-radius: 4px;
+  white-space: pre-wrap;
+}
+
+#log {
+  max-height: 16rem;
+  overflow: auto;
+  padding: 0.75rem;
+  background: #f3f3f3;
+  font-size: 0.8rem;
+}
