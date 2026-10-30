@@ -6,7 +6,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import { Agent, BedrockModel } from '@strands-agents/sdk'
-import { errorFinalEvent, toFinalEvent, toPublicEvent } from './public-events'
+import { createEventMapper, errorFinalEvent, toFinalEvent } from './public-events'
 import type { PublicEnvelope, PublicEvent } from './public-events'
 import { getWeather } from './weather-tool'
 
@@ -93,6 +93,7 @@ export function startRun(prompt: string): AgentRun {
 }
 
 async function execute(run: AgentRun, agent: Agent, prompt: string): Promise<void> {
+  const toPublicEvent = createEventMapper()
   let final = errorFinalEvent
   try {
     for await (const event of agent.stream(prompt, { cancelSignal: run.signal })) {

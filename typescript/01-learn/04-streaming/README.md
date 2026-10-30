@@ -43,10 +43,13 @@ Each prompt starts a run: one agent invocation that the server tracks by ID. The
 
 ### Key Features
 
-- **Versioned public schema**: three event types (`text`, `tool`, `final`), each with `v: 1`. An allowlist maps Strands events onto them, so reasoning, tool input, and tool results never reach the browser.
+- **Versioned public schema**: four event types (`text`, `redact`, `tool`, `final`), each with `v: 1`. An allowlist maps Strands events onto them, so reasoning, tool input, tool results, and citation sources never reach the browser.
 - **Resumable streams**: every event has an SSE `id:` line. `EventSource` reconnects with `Last-Event-ID`, and the server replays the events the browser missed.
-- **One authoritative final event**: every run ends with exactly one `final` event, with status `complete`, `cancelled`, or `error`, that carries the full answer.
-- **Runs that outlive connections**: a dropped connection only unsubscribes. After 30 seconds with no listener, the run cancels its agent to stop token spend.
+- **One authoritative final event**: every run ends with exactly one `final` event that carries the full answer, cited text included. Its status says how the run ended: `complete`, `incomplete`, `blocked`, `cancelled`, or `error`.
+- **Concurrent tool calls**: each tool call gets its own `callId`, so the page tracks calls that run at the same time, even two calls to the same tool.
+- **Guardrail redaction**: when an output guardrail blocks the response, a `redact` event replaces the text on screen. Text streams before the guardrail assesses the whole response, so the user may already have read it.
+- **Runs that outlive connections**: a dropped connection only unsubscribes. After 30 seconds with no listener, the run requests cancellation of its agent.
+- **Slow clients**: the server drops a connection once 256 KiB of events wait for it. `EventSource` reconnects, and the buffer replays the rest.
 - **Long polling fallback** (Express): the same events and IDs, for networks that buffer streaming responses.
 - **Two frameworks**: an Express server with a plain HTML page, and a Next.js app with route handlers and a client component.
 
@@ -94,6 +97,8 @@ For a production build of the Next.js app, run `npm run build` and then `npm sta
 
 Open `http://localhost:3000` and ask a question, such as "What is the weather in Lisbon?". The answer streams into the page, and the status line shows `Running get_weather` while the tool runs. When the run ends, the final event replaces the streamed text. **Events on the wire** lists every event the browser received.
 
+To see concurrent tool calls, ask about two cities, such as "What is the weather in Lisbon and Porto?". When the model calls the tool for both cities at once, the status line lists both calls until each one finishes.
+
 Try the controls:
 
 - **Stop the run** calls the cancel route. The run ends with a final event with status `cancelled`.
@@ -103,15 +108,15 @@ Try the controls:
 ### From a terminal
 
 ```bash
-curl -X POST localhost:3000/runs -H 'Content-Type: application/json' \
-  -d '{"prompt": "What is the weather in Lisbon?"}'
-# {"id":"3f2c9a1e-5b7d-4c1e-9a0f-2d6b8e4c7a15"}
+RUN_ID=$(curl -s -X POST localhost:3000/runs -H 'Content-Type: application/json' \
+  -d '{"prompt": "What is the weather in Lisbon?"}' \
+  | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).id')
 
-curl -N localhost:3000/runs/<run id>/events
-curl -N -H 'Last-Event-ID: 5' localhost:3000/runs/<run id>/events
+curl -N "localhost:3000/runs/${RUN_ID}/events"
+curl -N -H 'Last-Event-ID: 5' "localhost:3000/runs/${RUN_ID}/events"
 ```
 
-The second stream replays the run from event 6. A finished run stays on the server for five minutes. In the Next.js app, the paths are `/api/runs` and `/api/runs/events?id=<run id>`.
+The first command keeps the run ID in `RUN_ID`. The last one replays the run from event 6. A finished run stays on the server for five minutes. In the Next.js app, the paths are `/api/runs` and `/api/runs/events?id=${RUN_ID}`, quoted the same way.
 
 ### Endpoints
 
@@ -128,18 +133,33 @@ Each SSE message is an `id:` line and a `data:` line with one JSON event:
 
 ```text
 id: 8
-data: {"id":8,"v":1,"type":"tool","name":"get_weather","status":"started"}
+data: {"id":8,"v":1,"type":"tool","callId":1,"name":"get_weather","status":"started"}
 ```
 
-| Type    | Fields                                                             | Meaning                                       |
-|---------|--------------------------------------------------------------------|-----------------------------------------------|
-| `text`  | `text`                                                             | A piece of the model response                 |
-| `tool`  | `name`, `status` (`started`, `succeeded`, `failed`)                | A tool call, without its input or result      |
-| `final` | `status` (`complete`, `cancelled`, `error`), `stopReason`, `text`  | The end of the run, with the full answer      |
+| Type     | Fields                                                                                      | Meaning                                                    |
+|----------|---------------------------------------------------------------------------------------------|------------------------------------------------------------|
+| `text`   | `text`                                                                                      | A piece of the model response, cited text included         |
+| `redact` | `text`                                                                                      | A guardrail blocked the response: show `text` instead      |
+| `tool`   | `callId`, `name`, `status` (`started`, `succeeded`, `failed`)                               | One tool call, without its input or result                 |
+| `final`  | `status` (`complete`, `incomplete`, `blocked`, `cancelled`, `error`), `stopReason`, `text` | The end of the run, with the full answer                   |
+
+The final status says how the run ended:
+
+- `complete`: the model finished its answer.
+- `incomplete`: an invocation limit, an interrupt, or a checkpoint stopped the run early.
+- `blocked`: a guardrail blocked the response, or the model refused.
+- `cancelled` or `error`: the run was cancelled, or it failed. A model that reaches its output token limit makes the SDK throw, so that run ends with `error`.
 
 ## Testing
 
-The Express app has a smoke test that needs no AWS credentials. An offline model streams reasoning, a tool call, and text through a real agent. The test checks that the public events carry none of the reasoning, tool input, or tool result, that the final event holds only the answer, and that runs cancel and replay correctly.
+The Express app has a smoke test that needs no AWS credentials. An offline model streams reasoning, tool calls, cited text, and a guardrail redaction through a real agent. The test checks that:
+
+- the public events carry none of the reasoning, tool input, tool results, citation sources, or redacted output;
+- the final event holds only the answer, cited text included;
+- two concurrent calls to the same tool get distinct `callId` values;
+- a redaction becomes a `redact` event, and the run ends `blocked`;
+- stop reasons map to the right final status;
+- runs cancel and replay correctly.
 
 ```bash
 cd typescript/01-learn/04-streaming/express

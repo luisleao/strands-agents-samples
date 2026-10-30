@@ -53,8 +53,8 @@
       const dropButton = document.querySelector('#drop')
       const longPolling = document.querySelector('#long-polling')
 
-      // The run on screen: its ID, the last event ID received, the streamed text, and a
-      // function that closes its current connection.
+      // The run on screen: its ID, the last event ID received, the streamed text, its
+      // running tool calls by callId, and a function that closes its current connection.
       let run
 
       document.querySelector('#ask').addEventListener('submit', async (submit) => {
@@ -72,7 +72,7 @@
         const { id } = await response.json()
         // Leave the previous run. With no listener, it cancels itself after 30 seconds.
         run?.disconnect()
-        run = { id, lastId: 0, text: '', done: false, disconnect: () => {} }
+        run = { id, lastId: 0, text: '', tools: new Map(), done: false, disconnect: () => {} }
         answer.textContent = ''
         log.textContent = ''
         status.textContent = 'Waiting for the agent'
@@ -135,8 +135,16 @@
         if (event.type === 'text') {
           current.text += event.text
           answer.textContent = current.text
+        } else if (event.type === 'redact') {
+          // A guardrail blocked the answer: replace everything shown so far.
+          current.text = event.text
+          answer.textContent = current.text
         } else if (event.type === 'tool') {
-          status.textContent = event.status === 'started' ? `Running ${event.name}` : ''
+          // Tools run concurrently, so track each running call by its callId.
+          if (event.status === 'started') current.tools.set(event.callId, event.name)
+          else current.tools.delete(event.callId)
+          const names = [...current.tools.values()].join(', ')
+          status.textContent = names ? `Running ${names}` : ''
         } else if (event.type === 'final') {
           current.done = true
           current.disconnect()

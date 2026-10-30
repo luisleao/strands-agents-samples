@@ -6,8 +6,15 @@
 import { useRef, useState, type FormEvent } from 'react'
 import type { PublicEnvelope } from '@/lib/public-events'
 
-// The run on screen: its ID, the last event ID received, and its open stream.
-type Run = { id: string; lastId: number; done: boolean; source?: EventSource }
+// The run on screen: its ID, the last event ID received, its running tool calls by
+// callId, and its open stream.
+type Run = {
+  id: string
+  lastId: number
+  done: boolean
+  tools: Map<number, string>
+  source?: EventSource
+}
 
 export default function Page() {
   const [prompt, setPrompt] = useState('What is the weather in Lisbon?')
@@ -28,9 +35,18 @@ export default function Page() {
       case 'text':
         setAnswer((text) => text + event.text)
         break
-      case 'tool':
-        setStatus(event.status === 'started' ? `Running ${event.name}` : '')
+      case 'redact':
+        // A guardrail blocked the answer: replace everything shown so far.
+        setAnswer(event.text)
         break
+      case 'tool': {
+        // Tools run concurrently, so track each running call by its callId.
+        if (event.status === 'started') current.tools.set(event.callId, event.name)
+        else current.tools.delete(event.callId)
+        const names = [...current.tools.values()].join(', ')
+        setStatus(names ? `Running ${names}` : '')
+        break
+      }
       case 'final':
         current.done = true
         current.source?.close()
@@ -70,7 +86,7 @@ export default function Page() {
     const { id } = (await response.json()) as { id: string }
     // Leave the previous run. With no listener, it cancels itself after 30 seconds.
     run.current?.source?.close()
-    const current: Run = { id, lastId: 0, done: false }
+    const current: Run = { id, lastId: 0, done: false, tools: new Map() }
     run.current = current
     setAnswer('')
     setLog([])

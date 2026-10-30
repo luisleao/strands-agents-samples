@@ -26,6 +26,9 @@ function lastSeenId(req: Request): number {
   return Number.isInteger(id) && id > 0 ? id : 0
 }
 
+// How far a client may fall behind before the server drops it.
+const MAX_PENDING_BYTES = 256 * 1024
+
 app.get('/runs/:id/events', (req, res) => {
   const run = getRun(req.params.id)
   if (!run) {
@@ -47,10 +50,17 @@ app.get('/runs/:id/events', (req, res) => {
   res.flushHeaders()
   res.write('retry: 3000\n\n')
 
-  const heartbeat = setInterval(() => res.write(': ping\n\n'), 15_000)
+  const open = () => !res.writableEnded && !res.destroyed
+  const heartbeat = setInterval(() => {
+    if (open()) res.write(': ping\n\n')
+  }, 15_000)
   const unsubscribe = run.subscribe(after, (event) => {
+    if (!open()) return
     res.write(`id: ${event.id}\ndata: ${JSON.stringify(event)}\n\n`)
     if (event.type === 'final') res.end()
+    // Drop a client that stopped reading, so unsent events can't pile up.
+    // EventSource reconnects with Last-Event-ID, and the buffer replays the rest.
+    else if (res.writableLength > MAX_PENDING_BYTES) res.destroy()
   })
   // A dropped connection only unsubscribes. The run keeps going for a reconnect.
   res.on('close', () => {
@@ -67,9 +77,12 @@ app.get('/runs/:id/poll', (req, res) => {
     return
   }
   const events: PublicEnvelope[] = []
-  const respond = () => {
+  const stopWaiting = () => {
     clearTimeout(timeout)
     unsubscribe()
+  }
+  const respond = () => {
+    stopWaiting()
     if (!res.headersSent) res.json({ events })
   }
   // Answer after the replayed batch or the first live event, or after 25 seconds.
@@ -77,7 +90,8 @@ app.get('/runs/:id/poll', (req, res) => {
     if (events.push(event) === 1) queueMicrotask(respond)
   })
   const timeout = setTimeout(respond, 25_000)
-  res.on('close', respond)
+  // The client went away: stop waiting, and write nothing to the closed connection.
+  res.on('close', stopWaiting)
 })
 
 // Stops the agent. The run then ends with a final event with status `cancelled`.
