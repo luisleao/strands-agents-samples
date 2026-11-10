@@ -13,7 +13,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@strands-agents/sdk": "1.22.0",
+    "@strands-agents/sdk": "1.24.0",
     "next": "16.4.3",
     "react": "19.3.1",
     "react-dom": "19.3.1",

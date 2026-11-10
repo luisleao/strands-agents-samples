@@ -7,12 +7,14 @@
  *   3. Concurrent calls to the same tool get distinct callIds.
  *   4. A guardrail redaction becomes a redact event, and the run ends blocked.
  *   5. Stop reasons map to complete, incomplete, blocked, and cancelled.
- *   6. A run replays the events after a given ID and keeps the latest 500.
+ *   6. A cancelled run keeps its message, such as the final message of the stop tool.
+ *   7. A run replays the events after a given ID and keeps the latest 500.
  *
  * An offline model stands in for Amazon Bedrock. Run with: npm run smoke
  */
 import assert from 'node:assert/strict'
 import { Agent, Model } from '@strands-agents/sdk'
+import { stop } from '@strands-agents/sdk/vended-tools/stop'
 import type {
   AgentResult,
   AgentStreamEvent,
@@ -42,8 +44,9 @@ const CITED = ['According to the guide, ', 'Lisbon has 300 sunny days a year.', 
 const BLOCKED = 'This text gets blocked. '
 const REPLACEMENT = '[Assistant output redacted.]'
 const PARTIAL = 'This answer stops early'
+const STOP_MESSAGE = 'Your table for two is booked for 8 pm.'
 
-type Scenario = 'weather' | 'parallel' | 'cited' | 'redacted' | 'paused'
+type Scenario = 'weather' | 'parallel' | 'cited' | 'redacted' | 'paused' | 'stopped'
 
 /** Reasons first, then streams the scenario one word at a time. */
 class OfflineModel extends Model<BaseModelConfig> {
@@ -88,6 +91,12 @@ class OfflineModel extends Model<BaseModelConfig> {
     if (this.scenario === 'paused') {
       yield* text(PARTIAL, signal)
       yield { type: 'modelMessageStopEvent', stopReason: 'pauseTurn' }
+      return
+    }
+    if (this.scenario === 'stopped') {
+      // The stop tool ends the run with agent.cancel({ message }).
+      yield* stopCall(STOP_MESSAGE)
+      yield { type: 'modelMessageStopEvent', stopReason: 'toolUse' }
       return
     }
 
@@ -161,9 +170,22 @@ async function* toolUse(toolUseId: string, city: string): AsyncGenerator<ModelSt
   yield { type: 'modelContentBlockStopEvent' }
 }
 
+async function* stopCall(message: string): AsyncGenerator<ModelStreamEvent> {
+  yield {
+    type: 'modelContentBlockStartEvent',
+    start: { type: 'toolUseStart', name: 'stop', toolUseId: 'stop-1' },
+  }
+  yield {
+    type: 'modelContentBlockDeltaEvent',
+    delta: { type: 'toolUseInputDelta', input: JSON.stringify({ message }) },
+  }
+  yield { type: 'modelContentBlockStopEvent' }
+}
+
 /** Streams one run the way agent-runs.ts does, and keeps what each side would see. */
 async function streamRun(scenario: Scenario, cancelSignal?: AbortSignal) {
-  const agent = new Agent({ model: new OfflineModel(scenario), tools: [getWeather], printer: false })
+  const tools = [getWeather, stop]
+  const agent = new Agent({ model: new OfflineModel(scenario), tools, printer: false })
   const toPublicEvent = createEventMapper()
   const raw: AgentStreamEvent[] = []
   const published: PublicEvent[] = []
@@ -277,11 +299,26 @@ async function main(): Promise<void> {
     type: 'final',
     status: 'cancelled',
     stopReason: 'cancelled',
-    text: '',
+    text: 'Cancelled by user',
   })
   console.log('  [stop] stop reasons map to complete, incomplete, blocked, and cancelled: OK')
 
-  // 6. Replay buffer ------------------------------------------------------
+  // 6. Cancel message -----------------------------------------------------
+  const stopped = await streamRun('stopped')
+  assert.deepEqual(toolEvents(stopped.published), [
+    { v: 1, type: 'tool', callId: 1, name: 'stop', status: 'started' },
+    { v: 1, type: 'tool', callId: 1, name: 'stop', status: 'succeeded' },
+  ])
+  assert.deepEqual(stopped.published.at(-1), {
+    v: 1,
+    type: 'final',
+    status: 'cancelled',
+    stopReason: 'cancelled',
+    text: STOP_MESSAGE,
+  })
+  console.log('  [cancel] a cancelled run keeps the stop tool final message: OK')
+
+  // 7. Replay buffer ------------------------------------------------------
   const run = new AgentRun()
   for (let i = 1; i <= 510; i++) run.push({ v: 1, type: 'text', text: `chunk ${i}` })
   const received: number[] = []

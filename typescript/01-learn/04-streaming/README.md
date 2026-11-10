@@ -95,13 +95,15 @@ npm run dev
 
 For a production build of the Next.js app, run `npm run build` and then `npm start`.
 
+Both apps need one long-lived Node.js process. A run keeps going after the server answers the request that starts it, and the runs live in the server's memory, so neither app works on a serverless platform as is. [Preparing for production](https://strandsagents.com/docs/user-guide/sdk/streaming/streaming-to-the-browser-guide/#preparing-for-production) in the guide explains what a serverless deployment needs.
+
 Open `http://localhost:3000` and ask a question, such as "What is the weather in Lisbon?". The answer streams into the page, and the status line shows `Running get_weather` while the tool runs. When the run ends, the final event replaces the streamed text. **Events on the wire** lists every event the browser received.
 
 To see concurrent tool calls, ask about two cities, such as "What is the weather in Lisbon and Porto?". When the model calls the tool for both cities at once, the status line lists both calls until each one finishes.
 
 Try the controls:
 
-- **Stop the run** calls the cancel route. The run ends with a final event with status `cancelled`.
+- **Stop the run** calls the cancel route. The run ends with a final event with status `cancelled` and the SDK's cancel message, `Cancelled by user`.
 - **Drop the connection** closes the stream and opens a new one two seconds later with `?after=<last id>`. The IDs in the log continue without gaps or repeats.
 - **Use long polling** (Express only) reads the same events from the poll route instead of `EventSource`. Set it before you send the prompt, or switch it and then drop the connection.
 
@@ -148,7 +150,8 @@ The final status says how the run ended:
 - `complete`: the model finished its answer.
 - `incomplete`: an invocation limit, an interrupt, or a checkpoint stopped the run early.
 - `blocked`: a guardrail blocked the response, or the model refused.
-- `cancelled` or `error`: the run was cancelled, or it failed. A model that reaches its output token limit makes the SDK throw, so that run ends with `error`.
+- `cancelled`: the run was cancelled. A run that the [stop tool](https://strandsagents.com/docs/user-guide/sdk/tools/vended-tools/stop/) ends is `cancelled` too, and its text is the tool's final message.
+- `error`: the run failed. A model that reaches its output token limit makes the SDK throw, so that run ends with `error`.
 
 ## Testing
 
@@ -159,6 +162,7 @@ The Express app has a smoke test that needs no AWS credentials. An offline model
 - two concurrent calls to the same tool get distinct `callId` values;
 - a redaction becomes a `redact` event, and the run ends `blocked`;
 - stop reasons map to the right final status;
+- a cancelled run keeps its message, such as the final message of the stop tool;
 - runs cancel and replay correctly.
 
 ```bash
